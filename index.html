@@ -511,7 +511,9 @@
   .form-hint.error { color: var(--diverging-neg); }
   #accountChipsCat { flex-wrap: wrap; overflow: visible; }
   /* giroconto: della scheda di modifica resta solo la descrizione */
-  #editTxModal.edit-transfer .modal-card > *:not(h2):not(#editFldDescr):not(#editHint):not(#editSaveBtn):not(#editCancelBtn) { display: none !important; }
+  #editTrBlock { display: none; }
+  #editTxModal.edit-transfer #editTrBlock { display: block; }
+  #editTxModal.edit-transfer .modal-card > *:not(h2):not(#editTrBlock):not(.form-row-2):not(#editFldDescr):not(#editHint):not(#editSaveBtn):not(#editCancelBtn):not(#editDeleteBtn) { display: none !important; }
 
   /* su schermi da telefono l'interfaccia usa già tutta la larghezza disponibile (.app arriva
      a 560px, più larga di qualunque telefono), ma testi/numeri erano dimensionati "in piccolo":
@@ -801,6 +803,11 @@
         <button class="chip" data-tipo="Escluso">Straordinario</button>
       </div>
 
+      <div id="editTrBlock">
+        <div class="form-field"><label>Da conto (uscita)</label><input type="text" id="editTrFrom" data-list="dlConto" autocomplete="off"></div>
+        <div class="form-field"><label>A conto (entrata)</label><input type="text" id="editTrTo" data-list="dlConto" autocomplete="off"></div>
+        <div class="form-hint" id="editTrNote" style="display:none"></div>
+      </div>
       <div class="form-field"><label>Conto</label><input type="text" id="editConto" data-list="dlConto" autocomplete="off"></div>
       <div class="form-field"><label>Categoria</label><input type="text" id="editCategoria" data-list="dlCategoria" autocomplete="off"></div>
       <div class="form-field"><label>Macro-categoria</label><input type="text" id="editMacro" data-list="dlMacro" autocomplete="off"></div>
@@ -2357,7 +2364,7 @@ document.getElementById('fCategoria').addEventListener('input', e => {
   if (m) document.getElementById('fMacro').value = m;
 });
 document.getElementById('fMacro').addEventListener('input', () => { macroTouched = true; });
-['fConto', 'fContoDa', 'fContoA', 'fCategoria', 'fMacro', 'editConto', 'editCategoria', 'editMacro'].forEach(initCombo);
+['fConto', 'fContoDa', 'fContoA', 'fCategoria', 'fMacro', 'editConto', 'editCategoria', 'editMacro', 'editTrFrom', 'editTrTo'].forEach(initCombo);
 
 function stepImporto(delta){
   const input = document.getElementById('fImporto');
@@ -3056,6 +3063,20 @@ document.getElementById('impConfirmBtn').addEventListener('click', () => {
 // I trasferimenti non compaiono in questa lista (vedi renderTransactions), quindi restano
 // fuori da questa funzionalità per costruzione: non serve gestirli qui.
 let editingRecord = null;
+let editingPair = null;
+// un giroconto è fatto da due righe collegate (uscita su un conto + entrata sull'altro): le trovo insieme
+function transferLegs(rec){
+  const mm = /^(To|From) '(.+)'$/.exec(rec.categoria || '');
+  let other = null;
+  if (mm){
+    const want = (mm[1] === 'To' ? "From '" : "To '") + rec.conto + "'";
+    const c = TX.filter(o => o !== rec && !o._pendDelete && o.tipo === 'Trasferimento' && o.conto === mm[2] && o.categoria === want && Math.abs(o.importo + rec.importo) < 0.005);
+    c.sort((a, b) => Math.abs(new Date(a.data) - new Date(rec.data)) - Math.abs(new Date(b.data) - new Date(rec.data)));
+    if (c.length && Math.abs(new Date(c[0].data) - new Date(rec.data)) <= 3 * 86400000) other = c[0];
+  }
+  const out = rec.importo < 0 ? rec : other, inn = rec.importo < 0 ? other : rec;
+  return { out, inn, missing: !other };
+}
 let editTipo = 'Uscita';
 let editSegnoExtra = 'Uscita';
 
@@ -3102,9 +3123,21 @@ function openEditModal(rec){
   editingRecord = rec;
   const isTr = rec.tipo === 'Trasferimento';
   document.getElementById('editTxModal').classList.toggle('edit-transfer', isTr);
-  document.getElementById('editTitle').textContent = isTr ? 'Descrizione del giroconto' : 'Modifica movimento';
+  document.getElementById('editTitle').textContent = isTr ? 'Modifica giroconto' : 'Modifica movimento';
+  document.getElementById('editDeleteBtn').textContent = isTr ? 'Elimina giroconto (entrambi i lati)' : 'Elimina movimento';
   if (isTr){
+    const pair = transferLegs(rec);
+    editingPair = pair;
+    const mm = /^(To|From) '(.+)'$/.exec(rec.categoria || '');
+    const from = rec.importo < 0 ? rec.conto : (mm ? mm[2] : ''), to = rec.importo < 0 ? (mm ? mm[2] : '') : rec.conto;
+    fillDatalist('dlConto', contoOptions());
+    document.getElementById('editTrFrom').value = from; document.getElementById('editTrTo').value = to;
+    document.getElementById('editImporto').value = Math.abs(rec.importo);
+    document.getElementById('editData').value = rec.data;
     document.getElementById('editDescr').value = rec.descr || '';
+    const note = document.getElementById('editTrNote');
+    note.style.display = pair.missing ? '' : 'none';
+    note.textContent = pair.missing ? 'Manca l\'altro lato di questo giroconto: salvando verrà creato.' : '';
     document.getElementById('editHint').textContent = ''; document.getElementById('editHint').classList.remove('error');
     document.getElementById('editTxModal').style.display = 'flex';
     return;
@@ -3130,7 +3163,7 @@ function openEditModal(rec){
 }
 function closeEditModal(){
   editingRecord = null;
-  document.getElementById('editTxModal').classList.remove('edit-transfer');
+  document.getElementById('editTxModal').classList.remove('edit-transfer'); editingPair = null;
   document.getElementById('editTxModal').style.display = 'none';
   // ripristina le datalist condivise (dlConto/dlCategoria/dlMacro) sullo stato del form "Nuovo movimento"
   updateNewFormVisibility();
@@ -3144,13 +3177,28 @@ document.getElementById('editSaveBtn').addEventListener('click', () => {
   const hint = document.getElementById('editHint');
   if (!editingRecord) return;
   if (editingRecord.tipo === 'Trasferimento'){
-    // giroconto: cambia solo la descrizione, su entrambe le righe collegate (uscita + entrata)
-    const rec = editingRecord, descrT = document.getElementById('editDescr').value.trim() || null;
-    const mm = /^(To|From) '(.+)'$/.exec(rec.categoria || '');
-    const other = mm ? TX.find(o => o !== rec && !o._pendDelete && o.tipo === 'Trasferimento' && o.data === rec.data
-      && Math.abs(o.importo + rec.importo) < 0.005 && o.conto === mm[2] && o.categoria === (mm[1] === 'To' ? "From '" : "To '") + rec.conto + "'") : null;
-    [rec, other].forEach(x => { if (!x) return; x.descr = descrT; if (x._row) x._pendEdit = true; });
-    closeEditModal(); renderAll(); showToast(other ? 'Descrizione aggiornata su entrambi i lati del giroconto.' : 'Descrizione aggiornata.');
+    // giroconto: modifico insieme le due righe collegate (uscita + entrata); se manca un lato lo creo
+    const rec = editingRecord, pair = editingPair || transferLegs(rec);
+    try {
+      const data = document.getElementById('editData').value;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) throw new Error('Inserisci una data valida.');
+      const amt = parseFloat(String(document.getElementById('editImporto').value).replace(',', '.'));
+      if (!(amt > 0)) throw new Error('Inserisci un importo maggiore di zero.');
+      const from = document.getElementById('editTrFrom').value.trim(), to = document.getElementById('editTrTo').value.trim();
+      if (!from || !to) throw new Error('Indica sia il conto di partenza sia quello di arrivo.');
+      if (from.toLowerCase() === to.toLowerCase()) throw new Error('I due conti devono essere diversi.');
+      const descrT = document.getElementById('editDescr').value.trim() || null;
+      let out = pair.out, inn = pair.inn, created = 0;
+      if (!out){ out = { tipo: 'Trasferimento', macro: null, ambito: null, _pend: true }; TX.push(out); created++; }
+      if (!inn){ inn = { tipo: 'Trasferimento', macro: null, ambito: null, _pend: true }; TX.push(inn); created++; }
+      Object.assign(out, { data, conto: from, categoria: "To '" + to + "'", importo: -amt, descr: descrT });
+      Object.assign(inn, { data, conto: to, categoria: "From '" + from + "'", importo: amt, descr: descrT });
+      [out, inn].forEach(x => { if (x._row) x._pendEdit = true; });
+      closeEditModal(); renderAll();
+      showToast('Giroconto aggiornato su entrambi i conti' + (created ? ' (creato anche l\'altro lato)' : '') + '.');
+    } catch (err) {
+      const hint = document.getElementById('editHint'); hint.textContent = err.message; hint.classList.add('error');
+    }
     return;
   }
   try {
@@ -3191,6 +3239,16 @@ document.getElementById('editSaveBtn').addEventListener('click', () => {
 document.getElementById('editDeleteBtn').addEventListener('click', () => {
   if (!editingRecord) return;
   const rec = editingRecord;
+  if (rec.tipo === 'Trasferimento'){
+    const pair = editingPair || transferLegs(rec), legs = [pair.out, pair.inn].filter(Boolean);
+    if (!confirm('Eliminare questo giroconto (entrambi i lati, uscita ed entrata)?' + (legs.some(l => l._row) ? ' Verrà rimosso anche dall\'Excel al prossimo salvataggio/sincronizzazione.' : ''))) return;
+    legs.forEach(l => {
+      if (l._row){ l._pendDelete = true; delete l._pendEdit; }
+      else { const ix = TX.indexOf(l); if (ix !== -1) TX.splice(ix, 1); }
+    });
+    closeEditModal(); renderAll(); showToast('Giroconto eliminato.');
+    return;
+  }
   if (!confirm('Eliminare questo movimento?' + (rec._row ? ' Verrà rimosso anche dall\'Excel al prossimo salvataggio/sincronizzazione.' : ''))) return;
   let msg;
   if (rec._row) {
