@@ -299,6 +299,8 @@
 
   /* ===== Nuovo movimento / sync Excel ===== */
   .theme-btn { position: relative; }
+  #saveBtn.saving { animation: savePulse 0.9s ease-in-out infinite; }
+  @keyframes savePulse { 50% { opacity: .35; } }
   .save-badge {
     position: absolute; top: -4px; right: -4px; background: var(--diverging-neg); color: #fff;
     font-size: 9px; font-weight: 700; border-radius: 999px; min-width: 15px; height: 15px;
@@ -774,6 +776,8 @@
           <select id="setTheme"><option value="auto">Automatico</option><option value="light">Chiaro</option><option value="dark">Scuro</option></select></div>
         <div class="set-row"><div><div class="set-t">Blocco automatico</div><div class="set-d">Chiede il PIN dopo un periodo di inattività</div></div>
           <select id="setAutolock"><option value="60">1 minuto</option><option value="120">2 minuti</option><option value="300">5 minuti</option><option value="600">10 minuti</option><option value="0">Mai</option></select></div>
+        <div class="set-row"><div><div class="set-t">Salvataggio automatico</div><div class="set-d">Salva da solo su Drive dopo ogni modifica o import</div></div>
+          <select id="setAutosave"><option value="1">Sì</option><option value="0">No</option></select></div>
         <div class="set-row"><div><div class="set-t">Privacy all'avvio</div><div class="set-d">Nasconde importi e ambito appena sblocchi</div></div>
           <select id="setPrivacyStart"><option value="0">No</option><option value="1">Sì</option></select></div>
       </div>
@@ -1220,8 +1224,22 @@ try { const v = localStorage.getItem('speseAutolock'); if (v !== null && !isNaN(
 let lastActivity = Date.now(), hiddenAt = 0;
 ['pointerdown', 'keydown', 'touchstart', 'scroll', 'input'].forEach(ev => document.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true, capture: true }));
 function hasPendingChanges(){ return Array.isArray(TX) && TX.some(r => r._pend || r._pendEdit || r._pendDelete); }
+// ---- salvataggio automatico ----
+let AUTOSAVE_ON = true;
+try { const v = localStorage.getItem('speseAutosave'); if (v === '0') AUTOSAVE_ON = false; } catch (e) {}
+let _autoT = 0, _saving = false, _saveAgain = false, _autoFailUntil = 0;
+function scheduleAutoSave(delay){
+  if (!AUTOSAVE_ON || !APP_UNLOCKED) return;
+  clearTimeout(_autoT);
+  _autoT = setTimeout(() => { if (window.__doSave) window.__doSave(true); }, delay == null ? 2500 : delay);
+}
+function flushAutoSave(){
+  if (!AUTOSAVE_ON || !APP_UNLOCKED || !hasPendingChanges()) return;
+  clearTimeout(_autoT); if (window.__doSave) window.__doSave(true);
+}
 function lockApp(){
   if (!APP_UNLOCKED) return;
+  flushAutoSave();
   if (!hasPendingChanges()) { location.reload(); return; }
   // modifiche non ancora salvate: non possiamo ricaricare senza perderle, quindi copriamo l'app e chiediamo il PIN
   SOFT_LOCK = true;
@@ -1233,8 +1251,9 @@ function lockApp(){
   setTimeout(() => document.getElementById('lockPin').focus(), 50);
 }
 setInterval(() => { if (APP_UNLOCKED && !SOFT_LOCK && AUTOLOCK_SEC > 0 && Date.now() - lastActivity > AUTOLOCK_SEC * 1000) lockApp(); }, 5000);
+window.addEventListener('pagehide', () => { flushAutoSave(); });
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { hiddenAt = Date.now(); document.body.classList.add('obscured'); }
+  if (document.hidden) { hiddenAt = Date.now(); document.body.classList.add('obscured'); flushAutoSave(); }
   else {
     document.body.classList.remove('obscured');
     if (APP_UNLOCKED && !SOFT_LOCK && AUTOLOCK_SEC > 0 && hiddenAt && Date.now() - hiddenAt > Math.min(AUTOLOCK_SEC, 60) * 1000) lockApp();
@@ -1380,6 +1399,7 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
   document.getElementById('setTheme').value = savedTheme;
   document.getElementById('setAutolock').value = String(AUTOLOCK_SEC);
   document.getElementById('setPrivacyStart').value = ps;
+  document.getElementById('setAutosave').value = AUTOSAVE_ON ? '1' : '0';
   ['setPinOld', 'setPinNew', 'setPinNew2'].forEach(id => { document.getElementById(id).value = ''; });
   setHint(''); settingsModal.style.display = 'flex';
 });
@@ -1387,6 +1407,7 @@ document.getElementById('setCloseBtn').addEventListener('click', () => { setting
 settingsModal.addEventListener('click', e => { if (e.target === settingsModal) settingsModal.style.display = 'none'; });
 document.getElementById('setTheme').addEventListener('change', e => { savedTheme = e.target.value; try { localStorage.setItem('speseTheme', savedTheme); } catch (x) {} applyTheme(savedTheme); });
 document.getElementById('setAutolock').addEventListener('change', e => { AUTOLOCK_SEC = Number(e.target.value); try { localStorage.setItem('speseAutolock', String(AUTOLOCK_SEC)); } catch (x) {} });
+document.getElementById('setAutosave').addEventListener('change', e => { AUTOSAVE_ON = e.target.value === '1'; try { localStorage.setItem('speseAutosave', e.target.value); } catch (x) {} if (AUTOSAVE_ON && hasPendingChanges()) scheduleAutoSave(500); });
 document.getElementById('setPrivacyStart').addEventListener('change', e => { try { localStorage.setItem('spesePrivacyStart', e.target.value); } catch (x) {} });
 document.getElementById('setLockNow').addEventListener('click', () => { settingsModal.style.display = 'none'; lockApp(); });
 document.getElementById('setPinBtn').addEventListener('click', async () => {
@@ -2169,7 +2190,25 @@ const INCOME_CATEGORY_MACRO = {
 };
 const INCOME_MACRO_LIST = ['LAVORO','ENTRATE GEN.'];
 
+// Impara categorie e macro-categorie nuove dai movimenti: cosi' restano nei suggerimenti anche dopo il salvataggio/riavvio.
+function learnCategories(){
+  const cnt = { Uscita: {}, Entrata: {} };
+  TX.forEach(r => {
+    if (r._pendDelete || !r.categoria || !r.macro || !cnt[r.tipo]) return;
+    const c = cnt[r.tipo][r.categoria] = cnt[r.tipo][r.categoria] || {};
+    c[r.macro] = (c[r.macro] || 0) + 1;
+  });
+  [['Uscita', EXPENSE_CATEGORY_MACRO, EXPENSE_MACRO_LIST], ['Entrata', INCOME_CATEGORY_MACRO, INCOME_MACRO_LIST]].forEach(([tipo, map, list]) => {
+    Object.keys(cnt[tipo]).forEach(cat => {
+      const m = Object.entries(cnt[tipo][cat]).sort((a, b) => b[1] - a[1])[0][0];
+      if (!map[cat]) map[cat] = m;
+      if (!list.includes(m)) list.push(m);
+    });
+  });
+  try { const cm = (typeof newTipo !== 'undefined' && newTipo === 'Entrata') ? INCOME_CATEGORY_MACRO : EXPENSE_CATEGORY_MACRO; fillDatalist('dlCategoria', Object.keys(cm).sort((a, b) => a.localeCompare(b, 'it'))); } catch (e) {}
+}
 function renderAll(){
+  learnCategories();
   renderAccountsGrid();
   renderOverview();
   renderTrend();
@@ -2441,6 +2480,7 @@ document.getElementById('addMovBtn').addEventListener('click', () => {
       const categoria = document.getElementById('fCategoria').value.trim();
       if (!categoria) throw new Error('Indica la categoria.');
       const macro = document.getElementById('fMacro').value.trim() || null;
+      if (!macro && newTipo !== 'Escluso' && !(newTipo === 'Entrata' ? INCOME_CATEGORY_MACRO : EXPENSE_CATEGORY_MACRO)[categoria]) throw new Error('"' + categoria + '" è una categoria nuova: indica anche la Macro-categoria.');
       let importo, tipo, ambito;
       if (newTipo === 'Escluso') {
         tipo = 'Escluso';
@@ -2471,6 +2511,7 @@ function updatePendingBadge(){
   const badge = document.getElementById('saveBadge');
   badge.style.display = n > 0 ? '' : 'none';
   badge.textContent = n > 9 ? '9+' : String(n);
+  if (n > 0 && Date.now() >= _autoFailUntil) scheduleAutoSave();
 }
 
 // =====================================================================================
@@ -3308,6 +3349,7 @@ document.getElementById('fData').value = todayISO();
 updateNewFormVisibility();
 setAmbitoDefault('');
 
+learnCategories();
 renderOverview();
 renderTrend();
 renderCategories();
@@ -3404,8 +3446,12 @@ refreshBtn.addEventListener('click', () => {
 // Google Drive (spese_data.json per i movimenti cifrati, Le_Mie_Spese.xlsx per il foglio calcolo)
 // - stessa identica logica di patch chirurgica di prima, solo eseguita lato server invece che in
 // locale. Funziona identico da qualunque dispositivo (desktop o telefono) con la stessa pagina.
-saveBtn.addEventListener('click', async () => {
-  saveBtn.disabled = true;
+async function doSave(auto){
+  if (_saving) { _saveAgain = true; return; }
+  if (auto && (!AUTOSAVE_ON || !hasPendingChanges())) return;
+  _saving = true; _saveAgain = false;
+  saveBtn.disabled = true; saveBtn.classList.add('saving');
+  let ok = false;
   try {
     const changeset = computeChangeset();
 
@@ -3423,7 +3469,10 @@ saveBtn.addEventListener('click', async () => {
         excelMsg = 'Excel non aggiornato (' + (syncErr && syncErr.message || syncErr) + ').';
       }
     }
-    updatePendingBadge();
+    // niente updatePendingBadge() qui con auto-salvataggio attivo: eviterebbe un ciclo di riprogrammazioni
+    const n = TX.filter(r => r._pend || r._pendEdit || r._pendDelete).length;
+    const badge = document.getElementById('saveBadge');
+    badge.style.display = n > 0 ? '' : 'none'; badge.textContent = n > 9 ? '9+' : String(n);
 
     // IMPORTANTE: la cifratura di TX avviene QUI, DOPO la sincronizzazione Excel - non prima.
     // Se la sincronizzazione riesce, commitChangeset() (sopra) toglie i flag _pend/_pendEdit/
@@ -3431,14 +3480,20 @@ saveBtn.addEventListener('click', async () => {
     // con i flag ancora presenti (bug gia corretto una volta il 22/08/2026, vedi memoria).
     const newEnc = await encryptTX(TX, CURRENT_PASSWORD);
     await gsRun('saveDataFile', JSON.stringify(newEnc));
-
-    showToast('Salvato su Google Drive.' + (excelMsg ? ' ' + excelMsg : ''));
+    ok = true;
+    _autoFailUntil = 0;
+    showToast((auto ? 'Salvato automaticamente.' : 'Salvato su Google Drive.') + (excelMsg ? ' ' + excelMsg : ''));
   } catch (err) {
-    showToast('Errore: ' + err.message, true);
+    if (auto) _autoFailUntil = Date.now() + 30000;
+    showToast((auto ? 'Salvataggio automatico non riuscito: ' : 'Errore: ') + err.message + (auto ? ' Riprovo tra poco.' : ''), true);
+    if (auto) { clearTimeout(_autoT); _autoT = setTimeout(() => { _autoFailUntil = 0; doSave(true); }, 30000); }
   } finally {
-    saveBtn.disabled = false;
+    _saving = false; saveBtn.disabled = false; saveBtn.classList.remove('saving');
+    if (_saveAgain || (ok && hasPendingChanges())) { _saveAgain = false; if (AUTOSAVE_ON) scheduleAutoSave(800); }
   }
-});
+}
+window.__doSave = doSave;
+saveBtn.addEventListener('click', () => { clearTimeout(_autoT); doSave(false); });
 
 refreshFileInput.addEventListener('change', function(e){
   const file = e.target.files[0];
