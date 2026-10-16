@@ -461,6 +461,8 @@
   .imp-main { flex: 1; min-width: 0; }
   .imp-d { font-size: 11.5px; color: var(--text-muted); }
   .imp-desc { font-size: 14.5px; font-weight: 600; word-break: break-word; }
+  input.imp-desc-in { width: 100%; box-sizing: border-box; font-family: inherit; color: inherit; background: transparent; border: 1px solid transparent; border-bottom: 1px dashed var(--baseline); border-radius: 8px; padding: 3px 6px; margin: 0 0 0 -6px; min-width: 0; text-overflow: ellipsis; }
+  input.imp-desc-in:focus { outline: none; background: var(--surface-1); border: 1px solid var(--series-blue); }
   .imp-amt { font-weight: 700; font-size: 15.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .imp-amt.pos { color: var(--diverging-pos); }
   .imp-badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 32px; }
@@ -2664,7 +2666,7 @@ function impRowHtml(r, i){
   const missing = r.include && r.tipo !== 'Trasferimento' && !r.categoria ? ' imp-missing' : (r.include && r.tipo === 'Trasferimento' && !r.counter ? ' imp-missing' : '');
   return `<div class="imp-row${r.include ? '' : ' off'}${missing}" data-i="${i}">
     <div class="imp-head"><input type="checkbox" data-act="inc" ${r.include ? 'checked' : ''} aria-label="Includi">
-      <div class="imp-main"><div class="imp-d">${r.data.slice(8, 10)}/${r.data.slice(5, 7)}/${r.data.slice(2, 4)}</div><div class="imp-desc">${escapeHtml(r.descr || '(senza descrizione)')}</div></div>
+      <div class="imp-main"><div class="imp-d">${r.data.slice(8, 10)}/${r.data.slice(5, 7)}/${r.data.slice(2, 4)}</div><input type="text" class="imp-desc imp-desc-in" data-act="desc" maxlength="120" enterkeyhint="done" autocomplete="off" aria-label="Descrizione del movimento" placeholder="(senza descrizione)" value="${escapeHtml(r.edit != null ? r.edit : (r.descr || ''))}"></div>
       <div class="imp-amt ${r.importo < 0 ? 'neg' : 'pos'}">${impFmt(r.importo)}</div></div>
     <div class="imp-badges">${stBadge}${noteB}${confBadge}</div>
     <div class="imp-tipos">${tipos}</div>${ctrl}</div>`;
@@ -2738,7 +2740,7 @@ function impHandle(e){
   const r = imp.rows[Number(rowEl.dataset.i)], act = t.dataset.act; if (!r || !act) return;
   if (e.type === 'click' && !['tipo', 'ambito'].includes(act)) return;
   if (e.type === 'change' && !['inc', 'cat', 'counter', 'macro'].includes(act)) return;
-  if (e.type === 'input' && act !== 'newcat') return;
+  if (e.type === 'input' && !['newcat', 'desc'].includes(act)) return;
   const sign = r.importo < 0 ? -1 : 1;
   if (act === 'inc'){ r.include = t.checked; }
   else if (act === 'tipo'){
@@ -2754,6 +2756,7 @@ function impHandle(e){
     else { r.newCat = false; r.categoria = t.value; r.macro = t.value ? (impMacroFor(t.value, sign) || '') : ''; if (!r.ambito) r.ambito = impPriorAmbito(r.conto, r.tipo); impPropagate(r); }
   } else if (act === 'macro'){ r.macro = t.value; return; }
   else if (act === 'newcat'){ r.categoria = t.value.trim(); r.touched = true; return; }
+  else if (act === 'desc'){ r.edit = t.value; return; }
   impRenderList();
 }
 ['click', 'change', 'input'].forEach(ev => document.getElementById('impList').addEventListener(ev, impHandle));
@@ -2784,10 +2787,10 @@ document.getElementById('impConfirmBtn').addEventListener('click', () => {
     document.getElementById('impBody').scrollTo({ top: 0, behavior: 'smooth' }); return;
   }
   const recs = inc.map(r => {
-    if (r.tipo === 'Trasferimento') return { data: r.data, conto: r.conto, categoria: r.importo < 0 ? `To '${r.counter}'` : `From '${r.counter}'`, macro: null, tipo: 'Trasferimento', importo: r.importo, descr: r.descr || null, ambito: null, _pend: true };
+    if (r.tipo === 'Trasferimento') return { data: r.data, conto: r.conto, categoria: r.importo < 0 ? `To '${r.counter}'` : `From '${r.counter}'`, macro: null, tipo: 'Trasferimento', importo: r.importo, descr: (r.edit != null ? r.edit.replace(/\s+/g, ' ').trim() : r.descr) || null, ambito: null, _pend: true };
     const catMap = r.importo < 0 ? EXPENSE_CATEGORY_MACRO : INCOME_CATEGORY_MACRO;
     if (!catMap[r.categoria] && r.macro) catMap[r.categoria] = r.macro;
-    return { data: r.data, conto: r.conto, categoria: r.categoria, macro: r.macro || null, tipo: r.importo < 0 ? 'Uscita' : 'Entrata', importo: r.importo, descr: r.descr || null, ambito: r.ambito || impPriorAmbito(r.conto, r.tipo), _pend: true };
+    return { data: r.data, conto: r.conto, categoria: r.categoria, macro: r.macro || null, tipo: r.importo < 0 ? 'Uscita' : 'Entrata', importo: r.importo, descr: (r.edit != null ? r.edit.replace(/\s+/g, ' ').trim() : r.descr) || null, ambito: r.ambito || impPriorAmbito(r.conto, r.tipo), _pend: true };
   });
   recs.forEach(x => TX.push(x));
   const n = recs.length; impClose(); renderAll();
