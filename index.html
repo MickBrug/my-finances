@@ -982,8 +982,8 @@
   <!-- ===== TAB: NUOVO MOVIMENTO ===== -->
   <section class="view" id="view-new">
     <div class="card">
-      <h2>Importa estratto conto</h2>
-      <p class="form-hint" style="margin:0 0 10px">Carica il file CSV o Excel scaricato da Intesa Sanpaolo o Revolut. L'app ti propone le categorie in base alle tue spese precedenti: tu confermi o cambi. Il file resta sul tuo telefono, non viene inviato a nessun servizio.</p>
+      <h2>Importa estratto conto <button type="button" class="info-btn" id="impInfoBtn" title="Come funziona" aria-label="Come funziona l'importazione" style="width:22px;height:22px;font-size:13px">ⓘ</button></h2>
+      <p class="form-hint" id="impInfoHint" style="display:none;margin:0 0 10px">Carica il file CSV o Excel scaricato da Intesa Sanpaolo o Revolut. L'app ti propone le categorie in base alle tue spese precedenti: tu confermi o cambi. Il file resta sul tuo telefono, non viene inviato a nessun servizio.</p>
       <button class="btn-secondary" id="importOpenBtn" type="button" style="width:100%;padding:13px 12px;font-size:14.5px">Scegli il file dell'estratto…</button>
       <input type="file" id="importFileInput" accept=".csv,.xlsx,.xls,.txt,text/csv" style="display:none">
     </div>
@@ -2774,6 +2774,7 @@ document.getElementById('impBulk').addEventListener('click', e => {
   else if (b.dataset.sel === 'none'){ imp.rows.forEach(r => { r.include = false; }); }
   impRenderList();
 });
+wireInfoBtn('impInfoBtn', 'impInfoHint');
 document.getElementById('importOpenBtn').addEventListener('click', () => document.getElementById('importFileInput').click());
 document.getElementById('importFileInput').addEventListener('change', e => { const f = e.target.files && e.target.files[0]; if (f) impOpenFile(f); });
 document.getElementById('impCloseBtn').addEventListener('click', impClose);
