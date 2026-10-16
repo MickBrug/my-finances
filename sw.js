@@ -1,0 +1,16 @@
+// Service worker: tiene in cache solo il "guscio" dell'app (HTML, icone, manifest) per l'avvio rapido
+// e per aprirsi anche senza rete. Le chiamate verso Google Drive (POST) non passano mai dalla cache.
+const CACHE = 'le-mie-finanze-v1';
+const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
+self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
+self.addEventListener('activate', e => {
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+});
+self.addEventListener('fetch', e => {
+  const req = e.request;
+  if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  // rete prima (così un aggiornamento dell'app arriva subito), cache come ripiego offline
+  e.respondWith(fetch(req).then(res => {
+    const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); return res;
+  }).catch(() => caches.match(req).then(r => r || caches.match('./index.html'))));
+});
