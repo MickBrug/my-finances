@@ -584,8 +584,15 @@
   .hero-card #heroDate { font-size: 12.5px; }
   .hero-card .privacy-toggle { color: rgba(255,255,255,.9); background: rgba(255,255,255,.16); width: 26px; height: 26px; margin-left: 6px; }
   .hero-card .privacy-toggle:hover { color: #fff; }
-  .hero-card .accounts-grid { display: flex; gap: 10px; overflow-x: auto; margin: 18px -20px 0; padding: 2px 20px 4px; scroll-snap-type: x proximity; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .hero-card .accounts-grid { display: flex; gap: 10px; overflow-x: auto; margin: 18px -20px 0; padding: 2px 20px 8px; scroll-padding-left: 20px; scroll-padding-right: 20px; scroll-snap-type: x proximity; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
   .hero-card .accounts-grid::-webkit-scrollbar { display: none; }
+  /* con il mouse: cursore "afferra", trascinamento e barra sottile visibile */
+  @media (hover: hover) and (pointer: fine) {
+    .hero-card .accounts-grid { cursor: grab; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.45) transparent; }
+    .hero-card .accounts-grid::-webkit-scrollbar { display: block; height: 6px; }
+    .hero-card .accounts-grid::-webkit-scrollbar-thumb { background: rgba(255,255,255,.4); border-radius: 6px; }
+    .hero-card .accounts-grid.dragging { cursor: grabbing; scroll-snap-type: none; user-select: none; }
+  }
   .hero-card .account-tile { flex: 0 0 auto; min-width: 118px; text-align: left; background: rgba(255,255,255,.15); border: 1px solid rgba(255,255,255,.2); border-radius: 16px; padding: 11px 13px; scroll-snap-align: start; color: #fff; }
   .hero-card .account-tile .name { color: rgba(255,255,255,.78); font-size: 12px; margin-bottom: 3px; }
   .hero-card .account-tile .val { font-size: 15.5px; font-weight: 720; overflow: visible; text-overflow: clip; }
@@ -897,7 +904,12 @@
       </div>
       <h2 style="margin-top:14px">Conto</h2>
       <div class="filter-row" id="accountChipsCat"></div>
-      <h2 style="margin-top:14px">Spese per categoria</h2>
+      <h2 id="catTitle" style="margin-top:14px">Spese per categoria</h2>
+      <div class="filter-row" id="catTipoChips">
+        <button class="chip active" data-ctipo="Uscita">Spese</button>
+        <button class="chip" data-ctipo="Entrata">Entrate</button>
+      </div>
+      <div class="form-hint" id="catTotal" style="margin:0 0 10px"></div>
       <div id="catBars"></div>
       <div class="empty" id="catEmpty" style="display:none">Nessuna spesa nel periodo selezionato.</div>
       <div class="cat-pie-wrap" id="catPieWrap" style="display:none">
@@ -926,6 +938,7 @@
           <button class="chip" data-ambito="Familiare">Familiare</button>
         </div>
       </div>
+      <div class="filter-row" id="catFilterBar" style="display:none"><button class="chip active" id="catFilterChip" type="button" title="Togli il filtro categoria"></button></div>
       <div id="txList"></div>
       <div class="empty" id="txEmpty" style="display:none">Nessuna transazione trovata.</div>
     </div>
@@ -1420,6 +1433,21 @@ function renderAccountsGrid(){
 }
 renderAccountsGrid();
 
+// scorrimento dei conti anche con il mouse (trascinamento + rotellina), oltre allo swipe da touch
+(function(){
+  const g = document.getElementById('accountsGrid'); if (!g) return;
+  g.scrollLeft = 0;
+  let down = false, sx = 0, sl = 0, moved = false;
+  g.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse' || e.button !== 0) return; down = true; moved = false; sx = e.clientX; sl = g.scrollLeft; });
+  window.addEventListener('pointermove', e => { if (!down) return; const dx = e.clientX - sx; if (Math.abs(dx) > 3){ moved = true; g.classList.add('dragging'); } if (moved) g.scrollLeft = sl - dx; });
+  window.addEventListener('pointerup', () => { down = false; g.classList.remove('dragging'); });
+  g.addEventListener('wheel', e => {
+    if (g.scrollWidth <= g.clientWidth) return;
+    const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : (e.shiftKey ? e.deltaY : 0);
+    if (d) { g.scrollLeft += d; e.preventDefault(); }
+  }, { passive: false });
+})();
+
 // ---- months / years available ----
 // Il 2021 contiene solo il saldo iniziale registrato al 31/12 (nessun movimento vero e proprio):
 // non va mostrato come periodo navigabile in Panoramica / Categorie / Andamento.
@@ -1640,6 +1668,21 @@ function renderTrend(){
 let periodMode = 'month';
 let ambitoFilterCat = 'all';
 let accountFilterCat = 'all';
+let catTipo = 'Uscita';
+const GIRO_OUT = 'Giroconti in uscita', GIRO_IN = 'Giroconti in entrata';
+const CAT_FALLBACK_COLORS = ['var(--series-blue)', 'var(--series-green)', 'var(--series-orange)', 'var(--series-violet)', 'var(--series-aqua)', 'var(--series-magenta)', 'var(--series-yellow)'];
+const catDynColors = {};
+function catColor(cat){
+  if (CAT_COLORS[cat]) return CAT_COLORS[cat];
+  if (cat === GIRO_OUT || cat === GIRO_IN) return 'var(--series-muted)';
+  if (!catDynColors[cat]) catDynColors[cat] = CAT_FALLBACK_COLORS[Object.keys(catDynColors).length % CAT_FALLBACK_COLORS.length];
+  return catDynColors[cat];
+}
+document.getElementById('catTipoChips').addEventListener('click', e => {
+  const b = e.target.closest('.chip'); if (!b) return;
+  document.querySelectorAll('#catTipoChips .chip').forEach(c => c.classList.toggle('active', c === b));
+  catTipo = b.dataset.ctipo; renderCategories();
+});
 document.querySelectorAll('#periodChips .chip').forEach(chip => {
   chip.addEventListener('click', () => {
     document.querySelectorAll('#periodChips .chip').forEach(c=>c.classList.remove('active'));
@@ -1669,14 +1712,28 @@ function renderCategories(){
   const totals = {};
   TX.forEach(r => {
     if (r._pendDelete) return;
-    if (r.tipo !== 'Uscita') return;
     if (!inPeriod(r)) return;
-    if (ambitoFilterCat !== 'all' && r.ambito !== ambitoFilterCat) return;
     if (accountFilterCat !== 'all' && r.conto !== accountFilterCat) return;
+    if (r.tipo === 'Trasferimento'){
+      // con un conto selezionato i giroconti fanno parte del totale (uscite verso altri conti / entrate da altri conti):
+      // senza, i totali del singolo conto non tornano. Non hanno un ambito, quindi compaiono solo con Ambito = Tutte.
+      if (accountFilterCat === 'all' || ambitoFilterCat !== 'all') return;
+      if (catTipo === 'Uscita' && r.importo < 0) totals[GIRO_OUT] = (totals[GIRO_OUT]||0) + Math.abs(r.importo);
+      else if (catTipo === 'Entrata' && r.importo > 0) totals[GIRO_IN] = (totals[GIRO_IN]||0) + Math.abs(r.importo);
+      return;
+    }
+    if (r.tipo !== catTipo) return;
+    if (ambitoFilterCat !== 'all' && r.ambito !== ambitoFilterCat) return;
     const key = r.macro || 'ALTRO';
     totals[key] = (totals[key]||0) + Math.abs(r.importo);
   });
   const entries = Object.entries(totals).sort((a,b)=>b[1]-a[1]);
+  const isEnt = catTipo === 'Entrata';
+  document.getElementById('catTitle').textContent = isEnt ? 'Entrate per categoria' : 'Spese per categoria';
+  document.getElementById('catEmpty').textContent = isEnt ? 'Nessuna entrata nel periodo selezionato.' : 'Nessuna spesa nel periodo selezionato.';
+  const catTotalEl = document.getElementById('catTotal');
+  const grand = entries.reduce((sum, [, v]) => sum + v, 0);
+  catTotalEl.textContent = entries.length ? ('Totale ' + (isEnt ? 'entrate' : 'spese') + ': ' + fmtEUR(grand) + (accountFilterCat !== 'all' ? ' · ' + accountFilterCat + ' (giroconti inclusi)' : '')) : '';
   const el = document.getElementById('catBars');
   const empty = document.getElementById('catEmpty');
   const pieWrap = document.getElementById('catPieWrap');
@@ -1685,7 +1742,7 @@ function renderCategories(){
   empty.style.display = 'none';
   const maxV = entries[0][1];
   entries.forEach(([cat, val]) => {
-    const color = CAT_COLORS[cat] || 'var(--series-muted)';
+    const color = catColor(cat);
     const row = document.createElement('div');
     row.className = 'cat-row';
     const w = privacyMode ? 0 : (val/maxV*100);
@@ -1697,6 +1754,7 @@ function renderCategories(){
       switchView('transactions');
       catFilter = cat;
       setTxAccount(accountFilterCat);
+      setTxTipo((cat === GIRO_OUT || cat === GIRO_IN) ? 'Trasferimento' : catTipo);
       renderTransactions();
     });
     el.appendChild(row);
@@ -1713,7 +1771,7 @@ function renderCategories(){
   } else {
     let acc = 0;
     stops = entries.map(([cat, val]) => {
-      const color = CAT_COLORS[cat] || 'var(--series-muted)';
+      const color = catColor(cat);
       const start = total > 0 ? (acc / total * 100) : 0;
       acc += val;
       const end = total > 0 ? (acc / total * 100) : 0;
@@ -1723,7 +1781,7 @@ function renderCategories(){
   pieEl.style.background = `conic-gradient(${stops})`;
   legendEl.innerHTML = '';
   entries.forEach(([cat, val]) => {
-    const color = CAT_COLORS[cat] || 'var(--series-muted)';
+    const color = catColor(cat);
     const pct = total > 0 ? (val / total * 100).toFixed(1) + '%' : '—';
     const item = document.createElement('div');
     item.className = 'item';
@@ -1732,6 +1790,7 @@ function renderCategories(){
       switchView('transactions');
       catFilter = cat;
       setTxAccount(accountFilterCat);
+      setTxTipo((cat === GIRO_OUT || cat === GIRO_IN) ? 'Trasferimento' : catTipo);
       renderTransactions();
     });
     legendEl.appendChild(item);
@@ -1743,6 +1802,7 @@ let accountFilter = 'all';
 let tipoFilter = 'all';
 let ambitoFilterTx = 'all';
 let catFilter = null;
+document.getElementById('catFilterChip').addEventListener('click', () => { catFilter = null; renderTransactions(); });
 let searchTerm = '';
 
 const accounts = Array.from(new Set(TX.map(r=>r.conto))).filter(Boolean)
@@ -1774,6 +1834,10 @@ accountChipsCatEl.addEventListener('click', e => {
   renderCategories();
 });
 // quando da Categorie si apre l'elenco di una categoria, il filtro conto viene portato con sé
+function setTxTipo(t){
+  tipoFilter = t;
+  document.querySelectorAll('#typeChips .chip').forEach(c => c.classList.toggle('active', c.dataset.tipo === t));
+}
 function setTxAccount(acc){
   accountFilter = acc;
   accountChipsEl.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c.dataset.acc === acc));
@@ -1815,7 +1879,12 @@ function renderTransactions(){
   // il drill-down da una categoria (click da Categorie) deve mostrare solo le spese reali che
   // compongono quel totale, non i movimenti Extra che condividono la stessa macro-categoria:
   // l'Extra resta confinato a sé, raggiungibile solo tramite il filtro conto/tipo dedicato.
-  if (catFilter) rows = rows.filter(r => r.macro === catFilter && r.tipo !== 'Escluso');
+  if (catFilter === GIRO_OUT) rows = rows.filter(r => r.tipo === 'Trasferimento' && r.importo < 0);
+  else if (catFilter === GIRO_IN) rows = rows.filter(r => r.tipo === 'Trasferimento' && r.importo > 0);
+  else if (catFilter) rows = rows.filter(r => r.macro === catFilter && r.tipo !== 'Escluso');
+  // chip "Categoria: X ✕" per vedere e togliere il filtro attivo (prima restava attivo senza segnalazione)
+  const cfBar = document.getElementById('catFilterBar');
+  if (cfBar){ cfBar.style.display = catFilter ? '' : 'none'; document.getElementById('catFilterChip').textContent = 'Categoria: ' + (catFilter || '') + '  ✕'; }
   if (searchTerm) rows = rows.filter(r =>
     (r.descr||'').toLowerCase().includes(searchTerm) ||
     (r.categoria||'').toLowerCase().includes(searchTerm) ||
@@ -2072,7 +2141,7 @@ function switchView(name){
   if (name === 'trend' && trendMode === 'categorie') renderTrendCategorie();
 }
 document.querySelectorAll('.tabbtn').forEach(btn => {
-  btn.addEventListener('click', () => switchView(btn.dataset.view));
+  btn.addEventListener('click', () => { if (btn.dataset.view === 'transactions' && catFilter){ catFilter = null; renderTransactions(); } switchView(btn.dataset.view); });
 });
 
 // =====================================================================================
