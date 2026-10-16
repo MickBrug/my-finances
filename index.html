@@ -509,6 +509,7 @@
   }
   .privacy-toggle:hover { color: var(--series-blue); }
   .form-hint.error { color: var(--diverging-neg); }
+  #accountChipsCat { flex-wrap: wrap; overflow: visible; }
   /* giroconto: della scheda di modifica resta solo la descrizione */
   #editTxModal.edit-transfer .modal-card > *:not(h2):not(#editFldDescr):not(#editHint):not(#editSaveBtn):not(#editCancelBtn) { display: none !important; }
 
@@ -894,6 +895,8 @@
         <button class="chip" data-ambito="Personale">Personale</button>
         <button class="chip" data-ambito="Familiare">Familiare</button>
       </div>
+      <h2 style="margin-top:14px">Conto</h2>
+      <div class="filter-row" id="accountChipsCat"></div>
       <h2 style="margin-top:14px">Spese per categoria</h2>
       <div id="catBars"></div>
       <div class="empty" id="catEmpty" style="display:none">Nessuna spesa nel periodo selezionato.</div>
@@ -1636,6 +1639,7 @@ function renderTrend(){
 // ---- categories view ----
 let periodMode = 'month';
 let ambitoFilterCat = 'all';
+let accountFilterCat = 'all';
 document.querySelectorAll('#periodChips .chip').forEach(chip => {
   chip.addEventListener('click', () => {
     document.querySelectorAll('#periodChips .chip').forEach(c=>c.classList.remove('active'));
@@ -1668,6 +1672,7 @@ function renderCategories(){
     if (r.tipo !== 'Uscita') return;
     if (!inPeriod(r)) return;
     if (ambitoFilterCat !== 'all' && r.ambito !== ambitoFilterCat) return;
+    if (accountFilterCat !== 'all' && r.conto !== accountFilterCat) return;
     const key = r.macro || 'ALTRO';
     totals[key] = (totals[key]||0) + Math.abs(r.importo);
   });
@@ -1691,6 +1696,7 @@ function renderCategories(){
     row.addEventListener('click', () => {
       switchView('transactions');
       catFilter = cat;
+      setTxAccount(accountFilterCat);
       renderTransactions();
     });
     el.appendChild(row);
@@ -1725,6 +1731,7 @@ function renderCategories(){
     item.addEventListener('click', () => {
       switchView('transactions');
       catFilter = cat;
+      setTxAccount(accountFilterCat);
       renderTransactions();
     });
     legendEl.appendChild(item);
@@ -1752,6 +1759,25 @@ accounts.forEach(acc => {
   c.className = 'chip'; c.textContent = acc; c.dataset.acc = acc;
   accountChipsEl.appendChild(c);
 });
+// filtro per conto anche nella tab Categorie (stessi conti della lista Movimenti)
+const accountChipsCatEl = document.getElementById('accountChipsCat');
+['all'].concat(accounts).forEach(acc => {
+  const c = document.createElement('button');
+  c.className = 'chip' + (acc === 'all' ? ' active' : ''); c.textContent = acc === 'all' ? 'Tutti i conti' : acc; c.dataset.acc = acc;
+  accountChipsCatEl.appendChild(c);
+});
+accountChipsCatEl.addEventListener('click', e => {
+  if (!e.target.matches('.chip')) return;
+  accountChipsCatEl.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  e.target.classList.add('active');
+  accountFilterCat = e.target.dataset.acc;
+  renderCategories();
+});
+// quando da Categorie si apre l'elenco di una categoria, il filtro conto viene portato con sé
+function setTxAccount(acc){
+  accountFilter = acc;
+  accountChipsEl.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c.dataset.acc === acc));
+}
 accountChipsEl.addEventListener('click', e => {
   if (!e.target.matches('.chip')) return;
   accountChipsEl.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
