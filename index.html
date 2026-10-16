@@ -509,6 +509,8 @@
   }
   .privacy-toggle:hover { color: var(--series-blue); }
   .form-hint.error { color: var(--diverging-neg); }
+  /* giroconto: della scheda di modifica resta solo la descrizione */
+  #editTxModal.edit-transfer .modal-card > *:not(h2):not(#editFldDescr):not(#editHint):not(#editSaveBtn):not(#editCancelBtn) { display: none !important; }
 
   /* su schermi da telefono l'interfaccia usa già tutta la larghezza disponibile (.app arriva
      a 560px, più larga di qualunque telefono), ma testi/numeri erano dimensionati "in piccolo":
@@ -784,7 +786,7 @@
   <!-- ===== modale modifica/eliminazione movimento (tab Movimenti) ===== -->
   <div class="modal-overlay" id="editTxModal" style="display:none">
     <div class="card modal-card">
-      <h2>Modifica movimento</h2>
+      <h2 id="editTitle">Modifica movimento</h2>
       <div class="filter-row" id="editTipoChips">
         <button class="chip active" data-tipo="Uscita">Uscita</button>
         <button class="chip" data-tipo="Entrata">Entrata</button>
@@ -808,7 +810,7 @@
         <div class="form-field"><label>Data</label><input type="date" id="editData"></div>
       </div>
 
-      <div class="form-field"><label>Descrizione (opzionale)</label><input type="text" id="editDescr" autocomplete="off"></div>
+      <div class="form-field" id="editFldDescr"><label>Descrizione (opzionale)</label><input type="text" id="editDescr" autocomplete="off"></div>
 
       <div class="form-field" id="editFldAmbito">
         <label>Ambito</label>
@@ -1839,8 +1841,8 @@ function renderTransactions(){
     // I trasferimenti non sono modificabili da qui: il form di modifica gestisce solo
     // Entrata/Uscita/Escluso, ed essendo il trasferimento una coppia di righe collegate,
     // modificarne solo una romperebbe l'accoppiamento. Restano quindi solo consultabili.
-    if (!isTransfer) item.addEventListener('click', () => openEditModal(r));
-    else item.style.cursor = 'default';
+    // (aggiornato) i giroconti si aprono in modalità "solo descrizione"
+    item.addEventListener('click', () => openEditModal(r));
     el.appendChild(item);
   });
 }
@@ -2673,12 +2675,19 @@ function impRowHtml(r, i){
 }
 function impRenderList(){
   const rows = imp.rows;
-  const vis = rows.map((r, i) => [r, i]).filter(([r]) => imp.filter === 'all' || (imp.filter === 'review' && (impRowNeedsReview(r) || (r.include && r.tipo === 'Trasferimento' && !r.counter))) || (imp.filter === 'dup' && r.status !== 'new'));
+  const needsRev = r => impRowNeedsReview(r) || (r.include && r.tipo === 'Trasferimento' && !r.counter);
+  // vista "Da rivedere": una riga resta in elenco anche dopo che l'hai sistemata (altrimenti spariva
+  // appena sceglievi la categoria); l'elenco si aggiorna solo quando cambi filtro
+  if (!(imp.keep instanceof Set)) imp.keep = new Set();
+  if (imp.filter === 'review') rows.forEach((r, i) => { if (needsRev(r)) imp.keep.add(i); });
+  const vis = rows.map((r, i) => [r, i]).filter(([r, i]) => imp.filter === 'all' || (imp.filter === 'review' && imp.keep.has(i)) || (imp.filter === 'dup' && r.status !== 'new'));
+  const impBodyEl = document.getElementById('impBody'), keepScroll = impBodyEl ? impBodyEl.scrollTop : 0;
   document.getElementById('impList').innerHTML = vis.length ? vis.map(([r, i]) => impRowHtml(r, i)).join('') : '<div class="form-hint" style="text-align:center;padding:24px 0">Nessun movimento in questa vista.</div>';
   const inc = rows.filter(r => r.include), toReview = rows.filter(r => r.include && ((r.tipo !== 'Trasferimento' && !r.categoria) || (r.tipo === 'Trasferimento' && !r.counter))).length;
   const nDup = rows.filter(r => r.status !== 'new').length;
   document.getElementById('impSummary').innerHTML = `<b>${rows.length}</b> movimenti letti${imp.skipped ? ' (' + imp.skipped + ' non completati ignorati)' : ''} · <b>${nDup}</b> già presenti o simili · suggerimenti basati su ${imp.nHist} movimenti precedenti`;
   document.querySelectorAll('#impFilter .chip').forEach(c => c.classList.toggle('active', c.dataset.f === imp.filter));
+  if (impBodyEl) impBodyEl.scrollTop = keepScroll;
   const revChip = document.querySelector('#impFilter .chip[data-f="review"]'); if (revChip) revChip.textContent = 'Da rivedere (' + rows.filter(r => impRowNeedsReview(r) || (r.include && r.tipo === 'Trasferimento' && !r.counter)).length + ')';
   const btn = document.getElementById('impConfirmBtn');
   btn.textContent = inc.length ? `Importa ${inc.length} moviment${inc.length === 1 ? 'o' : 'i'}` + (toReview ? ` (${toReview} senza categoria)` : '') : 'Nessun movimento selezionato';
@@ -2705,7 +2714,7 @@ function impRenderMapUI(){
 }
 async function impOpenFile(file){
   const hint = document.getElementById('impHint');
-  imp.fileName = file.name; imp.filter = 'all';
+  imp.fileName = file.name; imp.filter = 'all'; imp.keep = new Set();
   impOv.style.display = 'flex'; document.body.style.overflow = 'hidden';
   document.getElementById('impFileName').textContent = file.name;
   document.getElementById('impList').innerHTML = '<div class="form-hint" style="text-align:center;padding:24px 0">Lettura del file…</div>';
@@ -2760,7 +2769,7 @@ function impHandle(e){
   impRenderList();
 }
 ['click', 'change', 'input'].forEach(ev => document.getElementById('impList').addEventListener(ev, impHandle));
-document.getElementById('impFilter').addEventListener('click', e => { const c = e.target.closest('.chip'); if (!c) return; imp.filter = c.dataset.f; impRenderList(); });
+document.getElementById('impFilter').addEventListener('click', e => { const c = e.target.closest('.chip'); if (!c) return; imp.filter = c.dataset.f; imp.keep = new Set(); impRenderList(); });
 document.getElementById('impConto').addEventListener('change', e => { imp.conto = e.target.value; impParseNow(); });
 document.getElementById('impMapBody').addEventListener('change', e => {
   const k = e.target.dataset.map; if (!k) return; const v = Number(e.target.value);
@@ -2783,9 +2792,11 @@ document.getElementById('impConfirmBtn').addEventListener('click', () => {
   const inc = imp.rows.filter(r => r.include);
   const bad = inc.find(r => (r.tipo !== 'Trasferimento' && !r.categoria) || (r.tipo === 'Trasferimento' && !r.counter));
   if (bad){
-    imp.filter = 'review'; impRenderList();
-    hint.textContent = 'Completa categoria (o conto del giroconto) per tutti i movimenti selezionati, oppure deselezionali.'; hint.classList.add('error');
-    document.getElementById('impBody').scrollTo({ top: 0, behavior: 'smooth' }); return;
+    // l'elenco resta com'è: porto la vista sul primo movimento incompleto (evidenziato in rosso)
+    imp.filter = 'all'; impRenderList();
+    const nBad = inc.filter(r => (r.tipo !== 'Trasferimento' && !r.categoria) || (r.tipo === 'Trasferimento' && !r.counter)).length;
+    hint.textContent = nBad + (nBad === 1 ? ' movimento è senza categoria (o conto del giroconto)' : ' movimenti sono senza categoria (o conto del giroconto)') + ': sono evidenziati in rosso. Completali oppure deselezionali.'; hint.classList.add('error'); showToast(nBad + (nBad === 1 ? ' movimento senza categoria' : ' movimenti senza categoria') + ': evidenziati in rosso');
+    const firstBad = document.querySelector('#impList .imp-row.imp-missing'); if (firstBad) firstBad.scrollIntoView({ block: 'center', behavior: 'smooth' }); return;
   }
   const recs = inc.map(r => {
     if (r.tipo === 'Trasferimento') return { data: r.data, conto: r.conto, categoria: r.importo < 0 ? `To '${r.counter}'` : `From '${r.counter}'`, macro: null, tipo: 'Trasferimento', importo: r.importo, descr: (r.edit != null ? r.edit.replace(/\s+/g, ' ').trim() : r.descr) || null, ambito: null, _pend: true };
@@ -2847,6 +2858,15 @@ document.getElementById('editAmbitoChips').addEventListener('click', e => {
 
 function openEditModal(rec){
   editingRecord = rec;
+  const isTr = rec.tipo === 'Trasferimento';
+  document.getElementById('editTxModal').classList.toggle('edit-transfer', isTr);
+  document.getElementById('editTitle').textContent = isTr ? 'Descrizione del giroconto' : 'Modifica movimento';
+  if (isTr){
+    document.getElementById('editDescr').value = rec.descr || '';
+    document.getElementById('editHint').textContent = ''; document.getElementById('editHint').classList.remove('error');
+    document.getElementById('editTxModal').style.display = 'flex';
+    return;
+  }
   editSegnoExtra = rec.importo >= 0 ? 'Entrata' : 'Uscita';
   editTipo = (rec.tipo === 'Entrata' || rec.tipo === 'Escluso') ? rec.tipo : 'Uscita';
   document.querySelectorAll('#editTipoChips .chip').forEach(c => c.classList.toggle('active', c.dataset.tipo === editTipo));
@@ -2868,17 +2888,29 @@ function openEditModal(rec){
 }
 function closeEditModal(){
   editingRecord = null;
+  document.getElementById('editTxModal').classList.remove('edit-transfer');
   document.getElementById('editTxModal').style.display = 'none';
   // ripristina le datalist condivise (dlConto/dlCategoria/dlMacro) sullo stato del form "Nuovo movimento"
   updateNewFormVisibility();
 }
 document.getElementById('editCancelBtn').addEventListener('click', closeEditModal);
 document.getElementById('editTxModal').addEventListener('click', e => {
-  if (e.target.id === 'editTxModal') closeEditModal();
+  // NON si chiude toccando fuori dalla scheda (si perdevano le modifiche): solo Annulla/Salva
+  if (false) closeEditModal();
 });
 document.getElementById('editSaveBtn').addEventListener('click', () => {
   const hint = document.getElementById('editHint');
   if (!editingRecord) return;
+  if (editingRecord.tipo === 'Trasferimento'){
+    // giroconto: cambia solo la descrizione, su entrambe le righe collegate (uscita + entrata)
+    const rec = editingRecord, descrT = document.getElementById('editDescr').value.trim() || null;
+    const mm = /^(To|From) '(.+)'$/.exec(rec.categoria || '');
+    const other = mm ? TX.find(o => o !== rec && !o._pendDelete && o.tipo === 'Trasferimento' && o.data === rec.data
+      && Math.abs(o.importo + rec.importo) < 0.005 && o.conto === mm[2] && o.categoria === (mm[1] === 'To' ? "From '" : "To '") + rec.conto + "'") : null;
+    [rec, other].forEach(x => { if (!x) return; x.descr = descrT; if (x._row) x._pendEdit = true; });
+    closeEditModal(); renderAll(); showToast(other ? 'Descrizione aggiornata su entrambi i lati del giroconto.' : 'Descrizione aggiornata.');
+    return;
+  }
   try {
     const data = document.getElementById('editData').value;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) throw new Error('Inserisci una data valida.');
