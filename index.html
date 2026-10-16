@@ -3033,10 +3033,23 @@ document.getElementById('impConfirmBtn').addEventListener('click', () => {
     if (!catMap[r.categoria] && r.macro) catMap[r.categoria] = r.macro;
     return { data: r.data, conto: r.conto, categoria: r.categoria, macro: r.macro || null, tipo: r.importo < 0 ? 'Uscita' : 'Entrata', importo: r.importo, descr: (r.edit != null ? r.edit.replace(/\s+/g, ' ').trim() : r.descr) || null, ambito: r.ambito || impPriorAmbito(r.conto, r.tipo), _pend: true };
   });
-  recs.forEach(x => TX.push(x));
+  // giroconto importato da un conto solo: creo anche l'altro lato (es. Banca -> Revolut: entrata in Revolut),
+  // altrimenti il saldo dell'altro conto non torna. Se l'altro lato c'è già (±2 giorni) non lo duplico:
+  // così importando poi anche l'estratto dell'altro conto la riga risulta "già presente".
+  const dd2 = (a, b) => Math.abs((new Date(a) - new Date(b)) / 86400000);
+  const mirrors = [];
+  recs.forEach(x => {
+    if (x.tipo !== 'Trasferimento') return;
+    const mm = /^(To|From) '(.+)'$/.exec(x.categoria || ''); if (!mm) return;
+    const otherConto = mm[2], otherCat = (mm[1] === 'To' ? "From '" : "To '") + x.conto + "'";
+    const exists = TX.concat(mirrors).some(o => !o._pendDelete && o.tipo === 'Trasferimento' && o.conto === otherConto
+      && o.categoria === otherCat && Math.abs(o.importo + x.importo) < 0.005 && dd2(o.data, x.data) <= 2);
+    if (!exists) mirrors.push({ data: x.data, conto: otherConto, categoria: otherCat, macro: null, tipo: 'Trasferimento', importo: -x.importo, descr: x.descr, ambito: null, _pend: true });
+  });
+  recs.forEach(x => TX.push(x)); mirrors.forEach(x => TX.push(x));
   const n = recs.length; impClose(); renderAll();
   switchView('transactions');
-  showToast(n + (n === 1 ? ' movimento importato' : ' movimenti importati') + '. Ricorda di salvare.');
+  showToast(n + (n === 1 ? ' movimento importato' : ' movimenti importati') + (mirrors.length ? ' + ' + mirrors.length + (mirrors.length === 1 ? ' lato' : ' lati') + ' del giroconto nell\'altro conto' : '') + '. Ricorda di salvare.');
 });
 
 // ---- modifica/eliminazione di un movimento esistente (tab Movimenti) ----
