@@ -1001,9 +1001,9 @@
   <section class="view" id="view-new">
     <div class="card">
       <h2>Importa estratto conto <button type="button" class="info-btn" id="impInfoBtn" title="Come funziona" aria-label="Come funziona l'importazione" style="width:22px;height:22px;font-size:13px">ⓘ</button></h2>
-      <p class="form-hint" id="impInfoHint" style="display:none;margin:0 0 10px">Carica il file CSV o Excel scaricato da Intesa Sanpaolo o Revolut. L'app ti propone le categorie in base alle tue spese precedenti: tu confermi o cambi. Il file resta sul tuo telefono, non viene inviato a nessun servizio.</p>
+      <p class="form-hint" id="impInfoHint" style="display:none;margin:0 0 10px">Carica il file CSV, Excel o PDF scaricato da Intesa Sanpaolo o Revolut. Il PDF è letto a testo: se una riga non viene capita, controlla l'elenco prima di importare. L'app ti propone le categorie in base alle tue spese precedenti: tu confermi o cambi. Il file resta sul tuo telefono, non viene inviato a nessun servizio.</p>
       <button class="btn-secondary" id="importOpenBtn" type="button" style="width:100%;padding:13px 12px;font-size:14.5px">Scegli il file dell'estratto…</button>
-      <input type="file" id="importFileInput" accept=".csv,.xlsx,.xls,.txt,text/csv" style="display:none">
+      <input type="file" id="importFileInput" accept=".csv,.xlsx,.xls,.txt,.pdf,text/csv,application/pdf" style="display:none">
     </div>
     <div class="card">
       <h2>Nuovo movimento</h2>
@@ -2535,7 +2535,7 @@ function impParseDate(v){
   return null;
 }
 const IMP_COLS = {
-  date: ['completed date', 'data contabile', 'data operazione', 'data registrazione', 'started date', 'data', 'date', 'data valuta'],
+  date: ['completed date', 'date completed (utc)', 'date completed', 'completed date (utc)', 'data di completamento', 'data completamento', 'data di completamento (utc)', 'data contabile', 'data operazione', 'data registrazione', 'started date', 'date started (utc)', 'date started', 'started date (utc)', 'data di inizio', 'data inizio', 'data di inizio (utc)', 'data', 'date', 'data valuta'],
   desc: ['description', 'descrizione', 'operazione', 'dettagli', 'dettaglio', 'causale', 'details', 'beneficiario', 'controparte'],
   amount: ['amount', 'importo', 'importo eur', 'importo (eur)', 'importo in euro'],
   income: ['entrate', 'accrediti', 'avere', 'credit'],
@@ -2543,7 +2543,7 @@ const IMP_COLS = {
   cur: ['currency', 'valuta', 'divisa'],
   type: ['type', 'tipo'],
   state: ['state', 'stato'],
-  fee: ['fee', 'commissione', 'commissioni']
+  fee: ['fee', 'commissione', 'commissioni', 'costo', 'costi']
 };
 function impFindHeaderRow(table){
   let best = -1, bestScore = 1;
@@ -2563,12 +2563,144 @@ function impDetectMap(headers){
   const map = { date: one(IMP_COLS.date), amount: one(IMP_COLS.amount), income: one(IMP_COLS.income), expense: one(IMP_COLS.expense),
     cur: one(IMP_COLS.cur), type: one(IMP_COLS.type), state: one(IMP_COLS.state), fee: one(IMP_COLS.fee), desc: [] };
   IMP_COLS.desc.forEach(c => { const i = hs.indexOf(c); if (i >= 0 && !map.desc.includes(i)) map.desc.push(i); });
-  map.revolut = hs.includes('completed date') || (hs.includes('started date') && hs.includes('state'));
+  const hasH = re => hs.some(h => re.test(h));
+  map.revolut = hasH(/^(completed date|date completed|data di completamento|data completamento)/) || (hasH(/^(started date|date started|data di inizio|data inizio)/) && (hs.includes('state') || hs.includes('stato')));
   return map;
 }
+// ---- lettura di estratti conto in PDF (testo, non scansioni) ----
+// Il lettore PDF (pdf.js) viene scaricato dal CDN solo la prima volta che scegli un PDF; il file dell'estratto
+// resta sul dispositivo: viene letto qui, non inviato a nessuno.
+const PDFJS_VER = '3.11.174', PDFJS_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/' + PDFJS_VER + '/';
+let pdfjsPromise = null;
+function impLoadPdfJs(){
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (pdfjsPromise) return pdfjsPromise;
+  pdfjsPromise = new Promise((resolve, reject) => {
+    const sc = document.createElement('script');
+    sc.src = PDFJS_BASE + 'pdf.min.js'; sc.async = true;
+    sc.onload = () => { try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.js'; resolve(window.pdfjsLib); } catch (e) { reject(e); } };
+    sc.onerror = () => { pdfjsPromise = null; reject(new Error('Non riesco a caricare il lettore PDF (serve la connessione la prima volta). Riprova online oppure usa il CSV/Excel.')); };
+    document.head.appendChild(sc);
+  });
+  return pdfjsPromise;
+}
+const IMP_MONTHS = { gen: 1, jan: 1, feb: 2, mar: 3, apr: 4, mag: 5, may: 5, giu: 6, jun: 6, lug: 7, jul: 7, ago: 8, aug: 8, set: 9, sep: 9, ott: 10, oct: 10, nov: 11, dic: 12, dec: 12 };
+function impPdfDate(s){
+  s = String(s || '').trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})\b/); if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})\b/);
+  if (m){ let y = m[3]; if (y.length === 2) y = '20' + y; return y + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0'); }
+  m = s.match(/^(\d{1,2})\s+([A-Za-zÀ-ÿ]{3,9})\.?,?\s+(\d{4})\b/);
+  if (m){ const mo = IMP_MONTHS[impStripAcc(m[2]).slice(0, 3)]; if (mo) return m[3] + '-' + String(mo).padStart(2, '0') + '-' + m[1].padStart(2, '0'); }
+  return null;
+}
+const IMP_PDF_AMT = /^[+\-−–]?\s*[€$£]?\s*[+\-−–]?\s*\d{1,3}(?:[.,\s']\d{3})*[.,]\d{2}\s*(?:[€$£]|EUR|USD|GBP)?$/;
+function impPdfColRole(t){
+  const h = impStripAcc(t);
+  if (/\b(denaro in uscita|money out|paid out|uscite|uscita|addebit|dare|debit|prelievi)/.test(h)) return 'out';
+  if (/\b(denaro in entrata|money in|paid in|entrate|entrata|accredit|avere|credit|versamenti)/.test(h)) return 'in';
+  if (/^(importo|amount)\b/.test(h)) return 'amount';
+  if (/^(saldo|balance)\b/.test(h)) return 'balance';
+  if (/^(data|date)$/.test(h) || /^(data (contabile|operazione|registrazione|di inizio|di completamento)|date (started|completed))\b/.test(h)) return 'date';
+  if (/^(descrizione|description|dettagli|causale|operazione|descrizione operazione)\b/.test(h)) return 'desc';
+  if (/^(valuta|data valuta|value date)\b/.test(h)) return 'val';
+  return '';
+}
+async function impReadPdf(file){
+  const lib = await impLoadPdfJs();
+  const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  // 1) righe di testo per pagina: elementi raggruppati per quota (y) e ordinati per x, poi uniti in "celle"
+  const lines = [];
+  for (let p = 1; p <= doc.numPages; p++){
+    const tc = await (await doc.getPage(p)).getTextContent();
+    const items = tc.items.filter(it => it.str && it.str.trim()).map(it => ({ x: it.transform[4], y: it.transform[5], w: it.width || 0, h: Math.abs(it.transform[3]) || 8, s: it.str }));
+    items.sort((a, b) => b.y - a.y || a.x - b.x);
+    let cur = null;
+    items.forEach(it => {
+      if (!cur || Math.abs(cur.y - it.y) > Math.max(2.5, it.h * 0.4)){ cur = { y: it.y, items: [], page: p }; lines.push(cur); }
+      cur.items.push(it);
+    });
+  }
+  lines.forEach(L => {
+    L.items.sort((a, b) => a.x - b.x);
+    const cells = [];
+    L.items.forEach(it => {
+      const last = cells[cells.length - 1], gap = last ? it.x - last.x1 : 1e9, fs = it.h;
+      if (last && gap < fs * 0.6){ last.text += (gap > fs * 0.12 ? ' ' : '') + it.s; last.x1 = it.x + it.w; }
+      else cells.push({ x0: it.x, x1: it.x + it.w, text: it.s });
+    });
+    cells.forEach(c => { c.text = c.text.replace(/\s+/g, ' ').trim(); c.cx = (c.x0 + c.x1) / 2; });
+    L.cells = cells.filter(c => c.text); L.text = L.cells.map(c => c.text).join(' ');
+  });
+  const alltext = lines.map(l => l.text).join(' ');
+  // 2) colonne dalle intestazioni (anche spezzate su due righe) e transazioni
+  let cols = null; const out = []; let curTx = null; let unsigned = 0;
+  const IGN = /^(carta|card|pagina|page|riferimento|reference|id\b|iban|bic|saldo (iniziale|finale)|opening|closing|totale|total|riepilogo|summary|revolut bank|intesa|banca)/i;
+  for (let li = 0; li < lines.length; li++){
+    const L = lines[li]; if (!L.cells.length) continue;
+    const roles = L.cells.map(c => impPdfColRole(c.text));
+    if (roles.includes('date') && roles.includes('desc') && (roles.includes('out') || roles.includes('in') || roles.includes('amount'))
+        || (roles.includes('date') && (roles.includes('out') || roles.includes('in')) && L.cells.length >= 3)){
+      cols = L.cells.map((c, i) => ({ role: roles[i], cx: c.cx, x0: c.x0, x1: c.x1 })).filter(c => c.role);
+      curTx = null; continue;
+    }
+    // intestazione su due righe (es. "Denaro in" / "uscita"): provo a unire con la riga successiva
+    const next = lines[li + 1];
+    if (roles.some(r => r === 'date') && next && next.cells.length && !impPdfDate(next.cells[0].text)){
+      const merged = L.cells.map(c => { const n = next.cells.find(nc => Math.abs(nc.cx - c.cx) < 40); return n ? c.text + ' ' + n.text : c.text; });
+      const r2 = merged.map(impPdfColRole);
+      if (r2.includes('date') && (r2.includes('out') || r2.includes('in') || r2.includes('amount'))){
+        cols = L.cells.map((c, i) => ({ role: r2[i], cx: c.cx, x0: c.x0, x1: c.x1 })).filter(c => c.role); curTx = null; li++; continue;
+      }
+    }
+    const date = impPdfDate(L.text.slice(0, 24));
+    if (date){
+      const dcell = L.cells[0], rest = L.cells.slice(1);
+      let first = dcell.text; const dm = first.match(/^(\d{4}-\d{2}-\d{2}|\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}|\d{1,2}\s+[A-Za-zÀ-ÿ]{3,9}\.?,?\s+\d{4})\s*(.*)$/);
+      const tailDesc = dm && dm[2] ? dm[2] : '';
+      let amt = null, cur = 'EUR'; const descParts = tailDesc ? [tailDesc] : []; let sawAmt = false;
+      rest.forEach(c => {
+        if (impPdfDate(c.text) && c.text.length <= 12){ return; }  // seconda data (valuta)
+        if (IMP_PDF_AMT.test(c.text)){
+          sawAmt = true;
+          const v = impParseNumber(c.text.replace(/[−–]/g, '-'));
+          if (/\$|USD/.test(c.text)) cur = 'USD'; else if (/£|GBP/.test(c.text)) cur = 'GBP';
+          let role = '';
+          if (cols && cols.length){
+            let best = null, bd = 1e9;
+            cols.forEach(k => { if (!['out', 'in', 'amount', 'balance'].includes(k.role)) return; const d = Math.min(Math.abs(c.cx - k.cx), Math.abs(c.x1 - k.x1)); if (d < bd){ bd = d; best = k; } });
+            role = best ? best.role : '';
+          }
+          if (role === 'out') amt = -Math.abs(v);
+          else if (role === 'in') amt = Math.abs(v);
+          else if (role === 'amount' || !role){ if (amt === null && (/^[\-−–]/.test(c.text.trim()) || /^[+]/.test(c.text.trim()) || /[\-−–]\s*[€$£]?\d/.test(c.text) || role === 'amount')) amt = v; }
+        } else descParts.push(c.text);
+      });
+      if (sawAmt || tailDesc){
+        curTx = { data: date, descr: descParts.join(' ').trim(), importo: amt, cur, extra: 0, page: L.page };
+        if (!sawAmt) { curTx.pending = true; }
+        out.push(curTx);
+        if (amt === null && sawAmt) unsigned++;
+        continue;
+      }
+    }
+    // riga di continuazione della descrizione (es. nome del beneficiario su una seconda riga)
+    if (curTx && curTx.page === L.page && L.text.length < 90 && !IMP_PDF_AMT.test(L.text) && !IGN.test(L.text) && curTx.extra < 1 && !roles.some(r => r)){
+      if (!/^[A-Za-zÀ-ÿ]+:\s/.test(L.text) || /^(a|da|to|from):/i.test(L.text)){ curTx.descr = (curTx.descr + ' ' + L.text).trim(); curTx.extra++; }
+    }
+  }
+  const good = out.filter(t => t.importo !== null && t.importo !== 0 && !isNaN(t.importo));
+  const table = [['Data', 'Descrizione', 'Importo', 'Valuta']].concat(good.map(t => [t.data, t.descr.slice(0, 120), t.importo, t.cur]));
+  const head = alltext.slice(0, 500);  // solo l'intestazione: nelle descrizioni può comparire 'Revolut' (es. giroconto)
+  table.__bank = /intesa|sanpaolo/i.test(head) ? 'intesa' : (/revolut/i.test(head) ? 'revolut' : '');
+  table.__skippedPdf = out.length - good.length;
+  if (!good.length) throw new Error('Nel PDF non trovo movimenti leggibili (forse è una scansione o ha un formato diverso). Prova con il CSV o l\'Excel.');
+  return table;
+}
+
 async function impReadFile(file){
   const name = file.name || '';
-  if (/\.pdf$/i.test(name)) throw new Error('I PDF non sono supportati: scarica l\'estratto in formato CSV o Excel dall\'app della banca.');
+  if (/\.pdf$/i.test(name) || (file.type || '') === 'application/pdf') return await impReadPdf(file);
   if (/\.(xlsx|xls)$/i.test(name)){
     const buf = new Uint8Array(await file.arrayBuffer());
     const wb = XLSX.read(buf, { type: 'array', cellDates: true });
@@ -2682,7 +2814,7 @@ function impSuggest(row){
       row.conf = 'bassa'; row.src = 'regola base'; return;
     }
   }
-  if (/\b(REVOLUT|INTESA|ISP|GIROCONTO|TOP-?UP|RICARICA REVOLUT|BONIFICO A MICHELE|BONIFICO DA MICHELE)\b/i.test(row.descr || '') || /^(TOPUP|EXCHANGE)$/i.test(row.rtype || '')){
+  if (/\b(REVOLUT|INTESA|ISP|GIROCONTO|TOP-?UP|RICARICA REVOLUT|BONIFICO A MICHELE|BONIFICO DA MICHELE)\b/i.test(row.descr || '') || /^(TOPUP|EXCHANGE|RICARICA|CAMBIO VALUTA|CAMBIO)$/i.test(row.rtype || '')){
     row.tipo = 'Trasferimento'; row.conf = 'bassa'; row.src = 'sembra un giroconto'; row.counter = impGuessCounter(row.conto); return;
   }
   row.tipo = sign < 0 ? 'Uscita' : 'Entrata'; row.categoria = ''; row.macro = ''; row.ambito = impPriorAmbito(row.conto, row.tipo); row.conf = ''; row.src = '';
@@ -2707,7 +2839,7 @@ function impBuildRows(){
       if (!isNaN(inc) && inc !== 0) imp_ = Math.abs(inc); else if (!isNaN(exp) && exp !== 0) imp_ = -Math.abs(exp);
     }
     if (isNaN(imp_) || imp_ === 0) continue;
-    if (m.state >= 0){ const st = String(r[m.state] || '').trim().toUpperCase(); if (st && st !== 'COMPLETED' && st !== 'COMPLETATO' && st !== 'ESEGUITO'){ imp.skipped++; continue; } }
+    if (m.state >= 0){ const st = String(r[m.state] || '').trim().toUpperCase(); if (st && !['COMPLETED', 'COMPLETATO', 'COMPLETATA', 'ESEGUITO', 'ESEGUITA'].includes(st)){ imp.skipped++; continue; } }
     const descr = Array.from(new Set(m.desc.map(ci => String(r[ci] == null ? '' : r[ci]).replace(/\s+/g, ' ').trim()).filter(Boolean))).join(' - ').slice(0, 120);
     const cur = m.cur >= 0 ? String(r[m.cur] || 'EUR').trim().toUpperCase() : 'EUR';
     const base = { data, conto: imp.conto, descr, importo: Math.round(imp_ * 100) / 100, key: impNormKey(descr), cur, rtype: m.type >= 0 ? String(r[m.type] || '') : '', touched: false, include: true, status: 'new', counter: '', newCat: false };
@@ -2780,7 +2912,7 @@ function impRenderList(){
   document.getElementById('impList').innerHTML = vis.length ? vis.map(([r, i]) => impRowHtml(r, i)).join('') : '<div class="form-hint" style="text-align:center;padding:24px 0">Nessun movimento in questa vista.</div>';
   const inc = rows.filter(r => r.include), toReview = rows.filter(r => r.include && ((r.tipo !== 'Trasferimento' && !r.categoria) || (r.tipo === 'Trasferimento' && !r.counter))).length;
   const nDup = rows.filter(r => r.status !== 'new').length;
-  document.getElementById('impSummary').innerHTML = `<b>${rows.length}</b> movimenti letti${imp.skipped ? ' (' + imp.skipped + ' non completati ignorati)' : ''} · <b>${nDup}</b> già presenti o simili · suggerimenti basati su ${imp.nHist} movimenti precedenti`;
+  document.getElementById('impSummary').innerHTML = `<b>${rows.length}</b> movimenti letti${imp.skipped ? ' (' + imp.skipped + ' non completati ignorati)' : ''}${imp.skippedPdf ? ' (' + imp.skippedPdf + ' righe del PDF senza importo chiaro ignorate)' : ''} · <b>${nDup}</b> già presenti o simili · suggerimenti basati su ${imp.nHist} movimenti precedenti`;
   document.querySelectorAll('#impFilter .chip').forEach(c => c.classList.toggle('active', c.dataset.f === imp.filter));
   if (impBodyEl) impBodyEl.scrollTop = keepScroll;
   const revChip = document.querySelector('#impFilter .chip[data-f="review"]'); if (revChip) revChip.textContent = 'Da rivedere (' + rows.filter(r => impRowNeedsReview(r) || (r.include && r.tipo === 'Trasferimento' && !r.counter)).length + ')';
@@ -2817,8 +2949,10 @@ async function impOpenFile(file){
     const table = await impReadFile(file);
     const hi = impFindHeaderRow(table);
     if (hi < 0) throw new Error('Non trovo la riga con le intestazioni (Data, Descrizione, Importo). Controlla di aver scaricato l\'estratto movimenti in CSV o Excel.');
+    imp.skippedPdf = table.__skippedPdf || 0;
     imp.table = table; imp.hdrIdx = hi; imp.headers = table[hi].map(h => h == null ? '' : String(h).trim());
     imp.map = impDetectMap(imp.headers);
+    if (table.__bank === 'revolut') imp.map.revolut = true;
     const names = accounts.slice();
     const guess = imp.map.revolut ? (names.find(a => /revolut/i.test(a)) || names[0]) : (names.find(a => /^banca$/i.test(a)) || names.find(a => !/revolut/i.test(a)) || names[0]);
     imp.conto = guess || '';
